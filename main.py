@@ -11,11 +11,16 @@ BASE_URLS = [
 ]
 PAGE_START = 1
 PAGE_END = 70
+REQUEST_TIMEOUT = 600  # 单次请求超时（秒），10 分钟
 GITHUB_TOKEN = os.getenv('MY_GITHUB_TOKEN')  # 从环境变量中读取
 GIST_ID = os.getenv('MY_GIST_ID')  # 从环境变量中读取
 
 def extract_server_info(server_url):
-    response = requests.get(server_url)
+    try:
+        response = requests.get(server_url, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        print(f"请求服务器失败 {server_url}: {e}")
+        return None
     soup = BeautifulSoup(response.text, "html.parser")
     config_div = soup.find("textarea", {"id": "config"})
     if config_div:
@@ -23,7 +28,11 @@ def extract_server_info(server_url):
     return None
 
 def extract_server_links(base_url, page_url):
-    response = requests.get(page_url)
+    try:
+        response = requests.get(page_url, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        print(f"请求页面失败 {page_url}: {e}")
+        return []
     soup = BeautifulSoup(response.text, "html.parser")
     servers = soup.find_all("div", class_="col-md-12 servers")
     server_links = []
@@ -40,38 +49,45 @@ def upload_to_gist(content, gist_id=None):
         "Accept": "application/vnd.github.v3+json"
     }
 
-    if gist_id:
-        # 读取现有的 Gist 数据
-        url = f"https://api.github.com/gists/{gist_id}"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            gist_data = response.json()
-            # 如果 Gist 中没有 V2Nodes_config.txt 文件，则添加该文件
-            if 'V2Nodes_config.txt' not in gist_data['files']:
-                gist_data['files']['V2Nodes_config.txt'] = {'content': content}
+    try:
+        if gist_id:
+            # 读取现有的 Gist 数据
+            url = f"https://api.github.com/gists/{gist_id}"
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                gist_data = response.json()
+                # 如果 Gist 中没有 V2Nodes_config.txt 文件，则添加该文件
+                if 'V2Nodes_config.txt' not in gist_data['files']:
+                    gist_data['files']['V2Nodes_config.txt'] = {'content': content}
+                else:
+                    gist_data['files']['V2Nodes_config.txt']['content'] = content
+                response = requests.patch(url, headers=headers, data=json.dumps(gist_data), timeout=REQUEST_TIMEOUT)
             else:
-                gist_data['files']['V2Nodes_config.txt']['content'] = content
-            response = requests.patch(url, headers=headers, data=json.dumps(gist_data))
+                print(f"读取 Gist 时出错，状态码: {response.status_code}")
         else:
-            print(f"读取 Gist 时出错，状态码: {response.status_code}")
-    else:
-        # 创建新的 Gist
-        gist_data = {
-            "description": "V2Nodes Server Configurations",
-            "public": True,
-            "files": {
-                "V2Nodes_config.txt": {
-                    "content": content
+            # 创建新的 Gist
+            gist_data = {
+                "description": "V2Nodes Server Configurations",
+                "public": True,
+                "files": {
+                    "V2Nodes_config.txt": {
+                        "content": content
+                    }
                 }
             }
-        }
-        response = requests.post(url, headers=headers, data=json.dumps(gist_data))
+            response = requests.post(url, headers=headers, data=json.dumps(gist_data), timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        print(f"上传 Gist 失败: {e}")
+        return {}
 
     if response.status_code != 200 and response.status_code != 201:
         print(f"上传 Gist 失败，响应代码: {response.status_code}")
         print(f"响应内容: {response.text}")
-    
-    return response.json()
+
+    try:
+        return response.json()
+    except ValueError:
+        return {}
 
 # -------------------------- 抓取功能 --------------------------
 def main():
