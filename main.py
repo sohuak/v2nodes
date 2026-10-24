@@ -3,13 +3,14 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import json
-import base64
 
 # -------------------------- 配置抓取部分 --------------------------
-BASE_URL = "https://zh.v2nodes.com"
+BASE_URLS = [
+    "https://zh.v2nodes.com",
+    "https://www.v2nodes.com",
+]
 PAGE_START = 1
-PAGE_END = 5
-PAGES = [f"{BASE_URL}/?page={i}" for i in range(PAGE_START, PAGE_END + 1)]
+PAGE_END = 70
 GITHUB_TOKEN = os.getenv('MY_GITHUB_TOKEN')  # 从环境变量中读取
 GIST_ID = os.getenv('MY_GIST_ID')  # 从环境变量中读取
 
@@ -21,7 +22,7 @@ def extract_server_info(server_url):
         return config_div.get("data-config")
     return None
 
-def extract_server_links(page_url):
+def extract_server_links(base_url, page_url):
     response = requests.get(page_url)
     soup = BeautifulSoup(response.text, "html.parser")
     servers = soup.find_all("div", class_="col-md-12 servers")
@@ -29,8 +30,7 @@ def extract_server_links(page_url):
     for server in servers:
         server_id = server.get("data-id")
         if server_id:
-            server_url = f"{BASE_URL}/servers/{server_id}/"
-            server_links.append(server_url)
+            server_links.append(f"{base_url}/servers/{server_id}/")
     return server_links
 
 def upload_to_gist(content, gist_id=None):
@@ -73,60 +73,30 @@ def upload_to_gist(content, gist_id=None):
     
     return response.json()
 
-def fetch_country_data(country_abbr):
-    base_url = "https://www.v2nodes.com/subscriptions/country/"
-    url = base_url + country_abbr.lower() + "/"
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            return response.text  # 返回页面内容
-        else:
-            return f"Error: {response.status_code}"
-    except requests.exceptions.RequestException as e:
-        return f"Request failed: {e}"
-
-def decode_base64_data(data):
-    try:
-        decoded_data = base64.urlsafe_b64decode(data + '==').decode('utf-8')  # 补齐 Base64 缺失的字符
-        return decoded_data
-    except Exception as e:
-        return f"Decoding failed: {e}"
-
-# -------------------------- 抓取和解码功能 --------------------------
+# -------------------------- 抓取功能 --------------------------
 def main():
     all_server_configs = []
+    seen = set()
 
-    # 第一部分：抓取 V2Nodes 服务器配置
-    for page in PAGES:
-        print(f"正在抓取页面: {page}")
-        server_links = extract_server_links(page)
-        for server_url in server_links:
-            print(f"正在抓取服务器: {server_url}")
-            config = extract_server_info(server_url)
-            if config:
-                all_server_configs.append(config)
-                print(config)
-            else:
-                print(f"未能提取配置：{server_url}")
-            time.sleep(1)
-
-    # 第二部分：抓取国家对应的链接并进行解码
-    countries = [
-        "AQ", "AR", "AU", "AT", "BH", "BY", "BE", "BO", "BR", "BG",
-        "CA", "CN", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HK"
-    ]
-
-    for country in countries:
-        data = fetch_country_data(country)
-        if "vless://" in data:
-            # 提取 Base64 数据
-            base64_data = data.split("vless://")[1].split("#")[0]
-            decoded_data = decode_base64_data(base64_data)
-            if decoded_data:
-                all_server_configs.append(decoded_data)
-                print(f"解码后的配置：\n{decoded_data}")
-        else:
-            print(f"没有找到 Base64 数据: {country}")
+    for base_url in BASE_URLS:
+        for page_num in range(PAGE_START, PAGE_END + 1):
+            page_url = f"{base_url}/?page={page_num}"
+            print(f"正在抓取页面: {page_url}")
+            server_links = extract_server_links(base_url, page_url)
+            if not server_links:
+                print(f"页面无服务器，跳过: {page_url}")
+                continue
+            for server_url in server_links:
+                print(f"正在抓取服务器: {server_url}")
+                config = extract_server_info(server_url)
+                if config:
+                    if config not in seen:
+                        seen.add(config)
+                        all_server_configs.append(config)
+                        print(config)
+                else:
+                    print(f"未能提取配置：{server_url}")
+                time.sleep(1)
 
     # 合并所有配置并上传到 Gist
     content = "\n".join(all_server_configs)
